@@ -1,0 +1,17 @@
+{
+  "name": "simple-relay",
+  "description": "Simple Relay",
+  "license": "MIT",
+  "main": "app.js",
+  "repository": "https://github.com/bilalakil/simple-relay",
+  "version": "1.0.0",
+  "dependencies": {
+    "aws-sdk": "^2.598.0",
+    "shortid": "^2.2.15"
+  },
+  "devDependencies": {
+    "eslint": "^6.8.0",
+    "eslint-config-airbnb-base": "^14.0.0",
+    "eslint-plugin-import": "^2.19.1"
+  }
+}

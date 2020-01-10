@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: simple-relay
+
+Resources:
+  ConnectionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: 'id'
+        AttributeType: 'S'
+      # - AttributeName: 'sessionKey'
+      #   AttributeType: 'M'
+      KeySchema:
+      - AttributeName: 'id'
+        KeyType: 'HASH'
+      BillingMode: PAY_PER_REQUEST
+      TableName: connections # Update lambda if you change this
+  SessionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: 'type'
+        AttributeType: 'S'
+      - AttributeName: 'id' # |open|<targetNumMembers> OR [<privateId>|]<id>|<targetNumMembers>
+        AttributeType: 'S'
+      # - AttributeName: 'openSessionId'
+      #   AttributeType: 'S'
+      # - AttributeName: 'members'
+      #   AttributeType: 'SS'
+      # - AttributeName: 'membersChangeNum' # to prevent race conditions when changing members
+      #   AttributeType: 'N'
+      KeySchema:
+      - AttributeName: 'type'
+        KeyType: 'HASH'
+      - AttributeName: 'id'
+        KeyType: 'RANGE'
+      BillingMode: PAY_PER_REQUEST
+      TableName: sessions # Update lambda if you change this
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+  MessageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: 'sessionId'
+        AttributeType: 'S'
+      - AttributeName: 'num'
+        AttributeType: 'N'
+      KeySchema:
+      - AttributeName: 'sessionId'
+        KeyType: 'HASH'
+      - AttributeName: 'num'
+        KeyType: 'RANGE'
+      BillingMode: PAY_PER_REQUEST
+      TableName: messages # Update lambda if you change this
+
+  WebSocketLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: app.webSocketHandler
+      Runtime: nodejs12.x
+      Environment:
+        Variables:
+          CONNECTION_TABLE_NAME: connections
+          SESSION_TABLE_NAME: sessions
+          MESSAGE_TABLE_NAME: messages
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName: connections
+      - DynamoDBCrudPolicy:
+          TableName: sessions
+      - DynamoDBCrudPolicy:
+          TableName: messages
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'execute-api:ManageConnections'
+          Resource:
+          - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocket}/*'
+
+  SessionMembersChangedLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: app.sessionMembersChangedHandler
+      Runtime: nodejs12.x
+      Environment:
+        Variables:
+          CONNECTION_TABLE_NAME: connections
+          SESSION_TABLE_NAME: sessions
+          MESSAGE_TABLE_NAME: messages
+          APIGW_ENDPOINT: !Join ['', [!Ref WebSocket, '.execute-api.', !Ref 'AWS::Region', '.amazonaws.com/', !Ref 'Stage']]
+      Events:
+        TableEventSource:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt SessionTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 1
+            MaximumRetryAttempts: 2
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName: connections
+      - DynamoDBCrudPolicy:
+          TableName: sessions
+      - DynamoDBCrudPolicy:
+          TableName: messages
+      - Statement:
+        - Effect: Allow
+          Action:
+          - 'execute-api:ManageConnections'
+          Resource:
+          - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocket}/*'
+
+  WebSocket:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: SimpleRelayWebSocket
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: \\$default
+
+  ConnectInteg:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocket
+      Description: Connect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations
+  DisconnectInteg:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocket
+      Description: Connect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations
+  DefaultInteg:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocket
+      Description: Connect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: 
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocket
+      RouteKey: $connect
+      AuthorizationType: NONE
+      OperationName: ConnectRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref ConnectInteg
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocket
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      OperationName: DisconnectRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DisconnectInteg
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocket
+      RouteKey: $default
+      AuthorizationType: NONE
+      OperationName: DefaultRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DefaultInteg
+
+  WebSocketLambdaPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - WebSocket
+      - WebSocketLambda
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WebSocketLambda
+      Principal: apigateway.amazonaws.com
+
+  Deployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+    - ConnectRoute
+    - DisconnectRoute
+    - DefaultRoute
+    Properties:
+      ApiId: !Ref WebSocket
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: Prod
+      Description: Prod Stage
+      DeploymentId: !Ref Deployment
+      ApiId: !Ref WebSocket
+
+Outputs:
+  WebSocketURI:
+    Description: 'The WSS Protocol URI to connect to'
+    Value: !Join ['', ['wss://', !Ref WebSocket, '.execute-api.', !Ref 'AWS::Region', '.amazonaws.com/', !Ref 'Stage']]
