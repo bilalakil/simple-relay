@@ -22,7 +22,7 @@ Resources:
       AttributeDefinitions:
       - AttributeName: 'type'
         AttributeType: 'S'
-      - AttributeName: 'id' # |open|<targetNumMembers> OR [<privateId>|]<id>|<targetNumMembers>
+      - AttributeName: 'id' # |open|<targetNumMembers> OR <id>|<targetNumMembers>
         AttributeType: 'S'
       # - AttributeName: 'openSessionId'
       #   AttributeType: 'S'
@@ -30,6 +30,10 @@ Resources:
       #   AttributeType: 'SS'
       # - AttributeName: 'membersChangeNum' # to prevent race conditions when changing members
       #   AttributeType: 'N'
+      # - AttributeName: 'targetNumMembers'
+      #   AttributeType: 'N'
+      # - AttributeName: 'isPrivate'
+      #   AttributeType: 'BOOL'
       KeySchema:
       - AttributeName: 'type'
         KeyType: 'HASH'
@@ -39,21 +43,6 @@ Resources:
       TableName: sessions # Update lambda if you change this
       StreamSpecification:
         StreamViewType: NEW_AND_OLD_IMAGES
-  MessageTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      AttributeDefinitions:
-      - AttributeName: 'sessionId'
-        AttributeType: 'S'
-      - AttributeName: 'num'
-        AttributeType: 'N'
-      KeySchema:
-      - AttributeName: 'sessionId'
-        KeyType: 'HASH'
-      - AttributeName: 'num'
-        KeyType: 'RANGE'
-      BillingMode: PAY_PER_REQUEST
-      TableName: messages # Update lambda if you change this
 
   WebSocketLambda:
     Type: AWS::Serverless::Function
@@ -65,14 +54,11 @@ Resources:
         Variables:
           CONNECTION_TABLE_NAME: connections
           SESSION_TABLE_NAME: sessions
-          MESSAGE_TABLE_NAME: messages
       Policies:
       - DynamoDBCrudPolicy:
           TableName: connections
       - DynamoDBCrudPolicy:
           TableName: sessions
-      - DynamoDBCrudPolicy:
-          TableName: messages
       - Statement:
         - Effect: Allow
           Action:
@@ -90,7 +76,6 @@ Resources:
         Variables:
           CONNECTION_TABLE_NAME: connections
           SESSION_TABLE_NAME: sessions
-          MESSAGE_TABLE_NAME: messages
           APIGW_ENDPOINT: !Join ['', [!Ref WebSocket, '.execute-api.', !Ref 'AWS::Region', '.amazonaws.com/', !Ref 'Stage']]
       Events:
         TableEventSource:
@@ -105,8 +90,6 @@ Resources:
           TableName: connections
       - DynamoDBCrudPolicy:
           TableName: sessions
-      - DynamoDBCrudPolicy:
-          TableName: messages
       - Statement:
         - Effect: Allow
           Action:
