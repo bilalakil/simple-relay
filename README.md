@@ -4,15 +4,18 @@
 
 Until these are all done, the presence of this code on GitHub serves more as a personal backup than anything else.
 
-- Add support for "session pinned payload"
-- Confirm how `getItem` and `putItem` handle failed conditions: do they throw or continue execution?
+- Confirm how `getItem` and `putItem` handle failed conditions: do they throw or return empty?
 - Make lambda retry when appropriate
 - Ensure lambdas are organised in consideration of retries
-- Add expiration timers and an automated clean up lambda
+- Add automated clean up lambda
 - Enable/disable clean up lambda automatically
 - Improve/DRY up lambda and template code
 - Fault tolerance analysis (race conditions; websocket frame drops; catastrophic failures)
 - Improve documentation
+
+### Future
+
+- Full message persistence looped in with clean up/expiration logic
 
 ## Useful Commands
 

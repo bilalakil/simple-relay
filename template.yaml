@@ -2,6 +2,20 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: simple-relay
 
+Parameters:
+  ConnectionExpireAfterSeconds:
+    Type: Number
+    Default: 1800
+    Description: (Required) The duration (in seconds) after which an innactive connection should be expire-able. Note that it will in fact be expired some time after.
+    MinValue: 1
+    ConstraintDescription: Required. Must be greater than or equal to 1.
+  SessionExpireAfterSeconds:
+    Type: Number
+    Default: 1800
+    Description: (Required) The duration (in seconds) after which an innactive session should be expire-able. Note that it will in fact be expired some time after.
+    MinValue: 1
+    ConstraintDescription: Required. Must be greater than or equal to 1.
+
 Resources:
   ConnectionTable:
     Type: AWS::DynamoDB::Table
@@ -9,8 +23,10 @@ Resources:
       AttributeDefinitions:
       - AttributeName: 'id'
         AttributeType: 'S'
-      # - AttributeName: 'sessionKey'
-      #   AttributeType: 'M'
+      # - AttributeName: 'sessionId'
+      #   AttributeType: 'S'
+      # - AttributeName: 'expireAfter'
+      #  AttributeType: 'N'
       KeySchema:
       - AttributeName: 'id'
         KeyType: 'HASH'
@@ -20,25 +36,23 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       AttributeDefinitions:
-      - AttributeName: 'type'
+      - AttributeName: 'id' # .open.<type>.<targetNumMembers> OR <id>
         AttributeType: 'S'
-      - AttributeName: 'id' # |open|<targetNumMembers> OR <id>|<targetNumMembers>
-        AttributeType: 'S'
+      # - AttributeName: 'type'
+      #   AttributeType: 'S'
+      # - AttributeName: 'expireAfter'
+      #   AttributeType: 'N'
       # - AttributeName: 'openSessionId'
       #   AttributeType: 'S'
-      # - AttributeName: 'members'
-      #   AttributeType: 'SS'
-      # - AttributeName: 'membersChangeNum' # to prevent race conditions when changing members
-      #   AttributeType: 'N'
+      # - AttributeName: 'members' # { M: { memberId: { S: <str> }[, connId: { S: <str> }] } }
+      #   AttributeType: 'L'
       # - AttributeName: 'targetNumMembers'
       #   AttributeType: 'N'
       # - AttributeName: 'isPrivate'
       #   AttributeType: 'BOOL'
       KeySchema:
-      - AttributeName: 'type'
-        KeyType: 'HASH'
       - AttributeName: 'id'
-        KeyType: 'RANGE'
+        KeyType: 'HASH'
       BillingMode: PAY_PER_REQUEST
       TableName: sessions # Update lambda if you change this
       StreamSpecification:
@@ -53,7 +67,9 @@ Resources:
       Environment:
         Variables:
           CONNECTION_TABLE_NAME: connections
+          CONNECTION_EXPIRE_AFTER_SECONDS: !Ref ConnectionExpireAfterSeconds
           SESSION_TABLE_NAME: sessions
+          SESSION_EXPIRE_AFTER_SECONDS: !Ref SessionExpireAfterSeconds
       Policies:
       - DynamoDBCrudPolicy:
           TableName: connections
