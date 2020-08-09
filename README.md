@@ -23,11 +23,13 @@ Caveats:
 Considering these caveats, this server is probably not suitable for games that "become successful".
 However, I hope that it can provide a smooth multiplayer development experience to allow you to get there!
 
+Important missing features:
+- Currently only a single pinned message is stored against the session.
+  All non-pinned messages are relayed and forgotten, and so won't be restored via [`HEARTBEAT`](#heartbeat).
+
 ## Documentation
 
 See [Deployment](#deployment) below for installation steps.
-
-WIP...
 
 ### Connection
 
@@ -45,7 +47,15 @@ From then you can start sending messages to each other/performing other actions.
 
 #### Host private session
 
+```bash
+wscat -c "wss://url/?sessionType=kubblammo&targetNumMembers=2&private=true"
+```
+
 #### Join private session
+
+```bash
+wscat -c "wss://url/?sessionType=kubblammo&sessionType=kubblammo&sessionId=IIFY26O6Q"
+```
 
 #### Rejoin session
 
@@ -77,6 +87,16 @@ Use them to provide game state required to bring the game up to date upon reconn
 
 #### `HEARTBEAT`
 
+```json
+{
+    "action": "HEARTBEAT",
+    "inclMessagesAfter": 1596933878705
+}
+```
+
+`inclMessagesAfter` is optional.
+See [`HEARTBEAT` (Messages)](#heartbeat-1) for an example response.
+
 #### `END_SESSION`
 
 ```json
@@ -90,6 +110,16 @@ The server will send messages to connected clients.
 Note that messages are always contained in an array, as multiple may be sent in a single frame.
 
 #### `PRIVATE_SESSION_PENDING`
+
+```json
+[
+    {
+        "sessionId": "IIFY26O6Q",
+        "targetNumMembers": 2,
+        "type": "PRIVATE_SESSION_PENDING"
+    }
+]
+```
 
 #### `SESSION_START`
 
@@ -140,6 +170,30 @@ Note that messages are always contained in an array, as multiple may be sent in 
 ```
 
 #### `HEARTBEAT`
+
+```json
+[
+    {
+        "type": "HEARTBEAT"
+    },
+    {
+        "memberNum": "0",
+        "payload": "Hi",
+        "pinned": true,
+        "time": "1596933878706",
+        "type": "MESSAGE"
+    }
+]
+```
+
+The heartbeat message itself is dumb, it simply informs you that the server received your beat.
+
+However, if `inclMessagesAfter` is set in [the action](#heartbeat),
+any messages stored (currently only a pinned message) after that time will sent as additional array elements,
+which are in the same format as [regular messages](#message).
+
+Currently only pinned messages are stored by Simple Relay, and so only they could be returned.
+In future, if all messages are stored (not only pinned), then all relevant ones would be included here too.
 
 #### `MEMBER_DISCONNECT`
 
@@ -198,7 +252,8 @@ sam deploy --guided --profile=doodadgames # First time deployment
 sam deploy --profile=doodadgames
 ```
 
-You can find your API Gateway Endpoint URL in the output values displayed after deployment.
+You can find your API Gateway Endpoint URL in the output values displayed after deployment,
+or in API Gateway in the AWS console afterwards (API > Stages > Prod > WebSocket URL).
 
 #### Down
 
@@ -224,7 +279,7 @@ Until these are all done, the presence of this code on GitHub serves more as a p
 - Confirm how `getItem` and `putItem` handle failed conditions: do they throw or return empty?
 - Make lambda retry when appropriate
 - Ensure lambdas are organised in consideration of retries
-- Add automated clean up lambda
+- Add automated clean up lambda OR investigate DynamoDB TTL usage for suitability
 - Enable/disable clean up lambda automatically
 - Improve/DRY up lambda and template code
 - Fault tolerance analysis (race conditions; websocket frame drops; catastrophic failures)
