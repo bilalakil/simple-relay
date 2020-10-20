@@ -41,7 +41,7 @@ The way in which you connect to the server determines which session you join, or
 wscat -c "wss://url/?sessionType=kubblammo&targetNumMembers=2"
 ```
 
-A successful connection means you're waiting for `targetNumMembers - 1` other members to also be waiting.
+A successful WS connection means you're waiting for `targetNumMembers - 1` other members to also be waiting.
 When that happens you'll all be put into a session and receive a [`SESSION_START`](#session_start) message.
 From then you can start sending messages to each other/performing other actions.
 
@@ -51,11 +51,19 @@ From then you can start sending messages to each other/performing other actions.
 wscat -c "wss://url/?sessionType=kubblammo&targetNumMembers=2&private=true"
 ```
 
+The same post-connection behaviour applies as to when [joining a public session](#join-public-session).
+
+Additionally, you will receive a [`PRIVATE_SESSION_PENDING`](#private_session_pending) message
+containing the details you need to share with other people so they can join the session.
+
 #### Join private session
 
 ```bash
 wscat -c "wss://url/?sessionType=kubblammo&sessionType=kubblammo&sessionId=IIFY26O6Q"
 ```
+
+The same post-connection behaviour applies as to when [hosting a private session](#host-private-session)
+(except that the `PRIVATE_SESSION_PENDING` message will not be sent if you joining caused the session to start).
 
 #### Rejoin session
 
@@ -276,6 +284,7 @@ Exercise care if you've multiple active SAM applications active.
 
 Until these are all done, the presence of this code on GitHub serves more as a personal backup than anything else.
 
+- Confirm `sessionMembersChangedHandler` is executed once per change - not ever bundled with multiple changes
 - Confirm how `getItem` and `putItem` handle failed conditions: do they throw or return empty?
 - Make lambda retry when appropriate
 - Ensure lambdas are organised in consideration of retries
