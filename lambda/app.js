@@ -21,7 +21,7 @@ const SEP = '.'; // '.' is not included in `shortid` or AWS IDs, and is query st
 const OPEN_SESSION_ID = `${SEP}open`;
 
 const success = { statusCode: 200 };
-const error = () => { // TODO: Understand the different kinds of error handling
+const error = () => { // TODO: Understand the different kinds of error handling in AWS Lambda
   throw new Error();
   return { statusCode: 500 };
 };
@@ -32,7 +32,7 @@ const getOpenSessionId = (type, targetNumMembers) => (
   OPEN_SESSION_ID + SEP + type + SEP + targetNumMembers.toString()
 );
 
-const getExpirationTime = (afterSeconds) => Date.now() + afterSeconds * 1000;
+const getExpirationTime = (afterSeconds) => Math.floor(Date.now() / 1000) + afterSeconds;
 
 const getMember = (rawMemberList, { memberId, connId }) => {
   const memberNum = rawMemberList.findIndex(
@@ -126,7 +126,7 @@ const joinSession = async (event) => {
 
   // Extract input
   const targetNumMembers = parseInt(qs.targetNumMembers, 10);
-  if (targetNumMembers <= 1) return error();
+  if (targetNumMembers <= 1) return error(); // NaN passes through
 
   const hostingPrivate = !!qs.private;
   const joiningPrivate = !!qs.sessionId;
@@ -189,7 +189,7 @@ const joinSession = async (event) => {
           ...(isNew ? { ExpressionAttributeNames: { '#type': 'type' } } : {}),
         },
       },
-      {
+      ...(isNewPublic ? [{
         Put: {
           TableName: SESSION_TABLE_NAME,
           Item: {
@@ -200,7 +200,7 @@ const joinSession = async (event) => {
           ConditionExpression: 'attribute_not_exists(id) OR openSessionId = :sessionId',
           ExpressionAttributeValues: { ':sessionId': { S: sessionId } },
         },
-      },
+      }] : []),
     ],
   }).promise());
 

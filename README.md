@@ -279,8 +279,6 @@ Until these are all done, the presence of this code on GitHub serves more as a p
 - Confirm how `getItem` and `putItem` handle failed conditions: do they throw or return empty?
 - Make lambda retry when appropriate
 - Ensure lambdas are organised in consideration of retries
-- Add automated clean up lambda OR investigate DynamoDB TTL usage for suitability
-- Enable/disable clean up lambda automatically
 - Improve/DRY up lambda and template code
 - Fault tolerance analysis (race conditions; websocket frame drops; catastrophic failures)
 - Improve documentation

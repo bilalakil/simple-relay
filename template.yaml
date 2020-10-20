@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: 2010-09-09
 Transform: AWS::Serverless-2016-10-31
 Description: simple-relay
 
@@ -21,42 +21,48 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       AttributeDefinitions:
-      - AttributeName: 'id'
-        AttributeType: 'S'
-      # - AttributeName: 'sessionId'
-      #   AttributeType: 'S'
-      # - AttributeName: 'expireAfter'
-      #  AttributeType: 'N'
+      - AttributeName: id
+        AttributeType: S
+      # - AttributeName: sessionId
+      #   AttributeType: S
+      # - AttributeName: expireAfter
+      #  AttributeType: N
       KeySchema:
-      - AttributeName: 'id'
-        KeyType: 'HASH'
+      - AttributeName: id
+        KeyType: HASH
       BillingMode: PAY_PER_REQUEST
       TableName: connections # Update lambda if you change this
+      TimeToLiveSpecification:
+        AttributeName: expireAfter
+        Enabled: true
   SessionTable:
     Type: AWS::DynamoDB::Table
     Properties:
       AttributeDefinitions:
-      - AttributeName: 'id' # .open.<type>.<targetNumMembers> OR <id>
-        AttributeType: 'S'
-      # - AttributeName: 'type'
-      #   AttributeType: 'S'
-      # - AttributeName: 'expireAfter'
-      #   AttributeType: 'N'
-      # - AttributeName: 'openSessionId'
-      #   AttributeType: 'S'
-      # - AttributeName: 'members' # { M: { memberId: { S: <str> }[, connId: { S: <str> }] } }
-      #   AttributeType: 'L'
-      # - AttributeName: 'targetNumMembers'
-      #   AttributeType: 'N'
-      # - AttributeName: 'isPrivate'
-      #   AttributeType: 'BOOL'
+      - AttributeName: id # .open.<type>.<targetNumMembers> OR <id>
+        AttributeType: S
+      # - AttributeName: type
+      #   AttributeType: S
+      # - AttributeName: expireAfter
+      #   AttributeType: N
+      # - AttributeName: openSessionId
+      #   AttributeType: S
+      # - AttributeName: members # { M: { memberId: { S: <str> }[, connId: { S: <str> }] } }
+      #   AttributeType: L
+      # - AttributeName: targetNumMembers
+      #   AttributeType: N
+      # - AttributeName: isPrivate
+      #   AttributeType: BOOL
       KeySchema:
-      - AttributeName: 'id'
-        KeyType: 'HASH'
+      - AttributeName: id
+        KeyType: HASH
       BillingMode: PAY_PER_REQUEST
       TableName: sessions # Update lambda if you change this
       StreamSpecification:
         StreamViewType: NEW_AND_OLD_IMAGES
+      TimeToLiveSpecification:
+        AttributeName: expireAfter
+        Enabled: true
 
   WebSocketLambda:
     Type: AWS::Serverless::Function
@@ -78,7 +84,7 @@ Resources:
       - Statement:
         - Effect: Allow
           Action:
-          - 'execute-api:ManageConnections'
+          - execute-api:ManageConnections
           Resource:
           - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocket}/*'
 
@@ -109,7 +115,7 @@ Resources:
       - Statement:
         - Effect: Allow
           Action:
-          - 'execute-api:ManageConnections'
+          - execute-api:ManageConnections
           Resource:
           - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocket}/*'
 
@@ -157,7 +163,7 @@ Resources:
       OperationName: ConnectRoute
       Target: !Join
         - '/'
-        - - 'integrations'
+        - - integrations
           - !Ref ConnectInteg
   DisconnectRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -168,7 +174,7 @@ Resources:
       OperationName: DisconnectRoute
       Target: !Join
         - '/'
-        - - 'integrations'
+        - - integrations
           - !Ref DisconnectInteg
   DefaultRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -179,7 +185,7 @@ Resources:
       OperationName: DefaultRoute
       Target: !Join
         - '/'
-        - - 'integrations'
+        - - integrations
           - !Ref DefaultInteg
 
   WebSocketLambdaPermission:
@@ -210,5 +216,5 @@ Resources:
 
 Outputs:
   WebSocketURI:
-    Description: 'The WSS Protocol URI to connect to'
+    Description: The WSS Protocol URI to connect to
     Value: !Join ['', ['wss://', !Ref WebSocket, '.execute-api.', !Ref 'AWS::Region', '.amazonaws.com/', !Ref 'Stage']]
