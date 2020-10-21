@@ -86,7 +86,7 @@ Resources:
           Action:
           - execute-api:ManageConnections
           Resource:
-          - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocket}/*'
+          - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*'
 
   SessionMembersChangedLambda:
     Type: AWS::Serverless::Function
@@ -98,7 +98,7 @@ Resources:
         Variables:
           CONNECTION_TABLE_NAME: connections
           SESSION_TABLE_NAME: sessions
-          APIGW_ENDPOINT: !Join ['', [!Ref WebSocket, '.execute-api.', !Ref 'AWS::Region', '.amazonaws.com/', !Ref 'Stage']]
+          APIGW_ENDPOINT: !Sub '${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
       Events:
         TableEventSource:
           Type: DynamoDB
@@ -117,9 +117,22 @@ Resources:
           Action:
           - execute-api:ManageConnections
           Resource:
-          - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocket}/*'
+          - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*'
 
-  WebSocket:
+  PingLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: app.pingHandler
+      Runtime: nodejs12.x
+      Events:
+        Ping:
+          Type: Api
+          Properties:
+            Path: /ping
+            Method: get
+
+  WebSocketApi:
     Type: AWS::ApiGatewayV2::Api
     Properties:
       Name: SimpleRelayWebSocket
@@ -129,35 +142,29 @@ Resources:
   ConnectInteg:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
-      ApiId: !Ref WebSocket
+      ApiId: !Ref WebSocketApi
       Description: Connect Integration
       IntegrationType: AWS_PROXY
-      IntegrationUri: 
-        Fn::Sub:
-          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations'
   DisconnectInteg:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
-      ApiId: !Ref WebSocket
+      ApiId: !Ref WebSocketApi
       Description: Connect Integration
       IntegrationType: AWS_PROXY
-      IntegrationUri: 
-        Fn::Sub:
-          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations'
   DefaultInteg:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
-      ApiId: !Ref WebSocket
+      ApiId: !Ref WebSocketApi
       Description: Connect Integration
       IntegrationType: AWS_PROXY
-      IntegrationUri: 
-        Fn::Sub:
-          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketLambda.Arn}/invocations'
 
   ConnectRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
-      ApiId: !Ref WebSocket
+      ApiId: !Ref WebSocketApi
       RouteKey: $connect
       AuthorizationType: NONE
       OperationName: ConnectRoute
@@ -168,7 +175,7 @@ Resources:
   DisconnectRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
-      ApiId: !Ref WebSocket
+      ApiId: !Ref WebSocketApi
       RouteKey: $disconnect
       AuthorizationType: NONE
       OperationName: DisconnectRoute
@@ -179,7 +186,7 @@ Resources:
   DefaultRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
-      ApiId: !Ref WebSocket
+      ApiId: !Ref WebSocketApi
       RouteKey: $default
       AuthorizationType: NONE
       OperationName: DefaultRoute
@@ -191,7 +198,7 @@ Resources:
   WebSocketLambdaPermission:
     Type: AWS::Lambda::Permission
     DependsOn:
-      - WebSocket
+      - WebSocketApi
       - WebSocketLambda
     Properties:
       Action: lambda:InvokeFunction
@@ -205,16 +212,19 @@ Resources:
     - DisconnectRoute
     - DefaultRoute
     Properties:
-      ApiId: !Ref WebSocket
+      ApiId: !Ref WebSocketApi
   Stage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
       StageName: Prod
       Description: Prod Stage
       DeploymentId: !Ref Deployment
-      ApiId: !Ref WebSocket
+      ApiId: !Ref WebSocketApi
 
 Outputs:
-  WebSocketURI:
-    Description: The WSS Protocol URI to connect to
-    Value: !Join ['', ['wss://', !Ref WebSocket, '.execute-api.', !Ref 'AWS::Region', '.amazonaws.com/', !Ref 'Stage']]
+  HTTPSAPIURL:
+    Description: URL of the Simple Relay HTTPS API
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+  WebSocketAPIURL:
+    Description: URL of the Simple Relay WSS API
+    Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'

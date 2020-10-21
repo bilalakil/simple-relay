@@ -662,3 +662,5 @@ exports.sessionMembersChangedHandler = async (event) => {
 
   return success;
 };
+
+exports.pingHandler = () => new Promise((r) => r({ statusCode: 200, body: 'pong' }));
