@@ -23,7 +23,7 @@ const OPEN_SESSION_ID = `${SEP}open`;
 const success = { statusCode: 200 };
 const error = () => { // TODO: Understand the different kinds of error handling in AWS Lambda
   throw new Error();
-  return { statusCode: 500 };
+  return { statusCode: 500 }; // eslint-disable-line
 };
 
 const newId = () => shortid.generate();
@@ -381,15 +381,25 @@ const endSession = async (connId) => {
  * `event.body = { action: "HEARTBEAT"[, inclMessagesAfter: <int>] }`
  */
 const heartbeat = async (conn, body) => {
-  const session = await (DDB.updateItem({
-    TableName: SESSION_TABLE_NAME,
-    Key: { id: { S: conn.Attributes.sessionId.S } },
-    UpdateExpression: 'SET expireAfter = :expireAfter',
-    ExpressionAttributeValues: {
-      ':expireAfter': { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() },
-    },
-    ReturnValues: 'ALL_OLD',
-  }).promise());
+  let session;
+  try {
+    session = await (DDB.updateItem({
+      TableName: SESSION_TABLE_NAME,
+      Key: { id: { S: conn.Attributes.sessionId.S } },
+      UpdateExpression: 'SET expireAfter = :expireAfter',
+      ExpressionAttributeValues: {
+        ':expireAfter': { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() },
+      },
+      ConditionExpression: 'attribute_exists(id)',
+      ReturnValues: 'ALL_OLD',
+    }).promise());
+  } catch (e) {
+    if (e.code === 'ConditionalCheckFailedException') {
+      await communicate(conn.Attributes.id.S, { type: 'INVALID_CONNECTION' });
+      return success;
+    }
+    throw e;
+  }
 
   const inclMessagesAfter = parseInt(body.inclMessagesAfter, 10);
 
@@ -425,31 +435,43 @@ const sendMessage = async (conn, body) => {
   const now = Date.now();
 
   const session = await getSession(conn.Attributes.sessionId.S);
-  if (!session) return error();
+  if (!session.Item) {
+    await communicate(conn.Attributes.id.S, { type: 'INVALID_CONNECTION' });
+    return success;
+  }
 
   const rawMembers = session.Item.members.L;
   const { memberNum } = getMember(rawMembers, { connId: conn.Attributes.id.S });
 
-  await (DDB.updateItem({
-    TableName: SESSION_TABLE_NAME,
-    Key: { id: { S: conn.Attributes.sessionId.S } },
-    UpdateExpression: `
-      SET expireAfter = :expireAfter
-        ${body.pinned ? ', pinnedMessage = :pinnedMessage' : ''}
-    `,
-    ExpressionAttributeValues: {
-      ':expireAfter': { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() },
-      ...(body.pinned ? {
-        ':pinnedMessage': {
-          M: {
-            payload: { S: body.payload },
-            time: { N: now.toString() },
-            memberNum: { N: memberNum.toString() },
+  try {
+    await (DDB.updateItem({
+      TableName: SESSION_TABLE_NAME,
+      Key: { id: { S: conn.Attributes.sessionId.S } },
+      UpdateExpression: `
+        SET expireAfter = :expireAfter
+          ${body.pinned ? ', pinnedMessage = :pinnedMessage' : ''}
+      `,
+      ExpressionAttributeValues: {
+        ':expireAfter': { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() },
+        ...(body.pinned ? {
+          ':pinnedMessage': {
+            M: {
+              payload: { S: body.payload },
+              time: { N: now.toString() },
+              memberNum: { N: memberNum.toString() },
+            },
           },
-        },
-      } : {}),
-    },
-  }).promise());
+        } : {}),
+      },
+      ConditionExpression: 'attribute_exists(id)',
+    }).promise());
+  } catch (e) {
+    if (e.code === 'ConditionalCheckFailedException') {
+      await communicate(conn.Attributes.id.S, { type: 'INVALID_CONNECTION' });
+      return success;
+    }
+    throw e;
+  }
 
   await commToAllMembers(
     rawMembers,
@@ -498,9 +520,17 @@ exports.webSocketHandler = async (event) => {
   const action = actions.indexOf(body.action);
   if (action === -1) return error();
 
-  const conn = await updateConnExpiration(connId);
+  let conn;
+  let invalid = false;
+  try {
+    conn = await updateConnExpiration(connId);
+    if (!conn.Attributes) invalid = true;
+  } catch (e) {
+    if (e.code === 'ConditionalCheckFailedException') invalid = true;
+    else throw e;
+  }
 
-  if (!conn.Attributes) {
+  if (invalid) {
     await communicate(connId, { type: 'INVALID_CONNECTION' });
     return success;
   }
