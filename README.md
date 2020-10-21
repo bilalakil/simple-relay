@@ -31,14 +31,32 @@ Important missing features:
 
 See [Deployment](#deployment) below for installation steps.
 
+Note that there are two different domains/URLs that are output from deployment -
+one for the HTTPS API and one for the WSS API.
+
 ### Connection
 
 The way in which you connect to the server determines which session you join, or if you go into public matchmaking.
 
+#### Test connectivity
+
+```bash
+curl https://httpsApiUrl/ping
+```
+
+If this responds with status code 200 then you should be clear to try and connect to the websocket.
+
+It's suggested to check this before attempting connection to the websocket.
+The WS(S) protocol doesn't have standard support for error/response codes like HTTP does -
+if the WSS connection fails then you won't know the reason why.
+
+Thus it can be useful to rule out a connectivity issue (using this API) -
+then WSS connection issues are more likely to be fatal (i.e. session deleted).
+
 #### Join public session
 
 ```bash
-wscat -c "wss://url/?sessionType=kubblammo&targetNumMembers=2"
+wscat -c "wss://wsApiUrl/?sessionType=kubblammo&targetNumMembers=2"
 ```
 
 A successful WS connection means you're waiting for `targetNumMembers - 1` other members to also be waiting.
@@ -48,7 +66,7 @@ From then you can start sending messages to each other/performing other actions.
 #### Host private session
 
 ```bash
-wscat -c "wss://url/?sessionType=kubblammo&targetNumMembers=2&private=true"
+wscat -c "wss://wsApiUrl/?sessionType=kubblammo&targetNumMembers=2&private=true"
 ```
 
 The same post-connection behaviour applies as to when [joining a public session](#join-public-session).
@@ -59,7 +77,7 @@ containing the details you need to share with other people so they can join the 
 #### Join private session
 
 ```bash
-wscat -c "wss://url/?sessionType=kubblammo&sessionType=kubblammo&sessionId=IIFY26O6Q"
+wscat -c "wss://wsApiUrl/?sessionType=kubblammo&sessionType=kubblammo&sessionId=IIFY26O6Q"
 ```
 
 The same post-connection behaviour applies as to when [hosting a private session](#host-private-session)
@@ -68,7 +86,7 @@ The same post-connection behaviour applies as to when [hosting a private session
 #### Rejoin session
 
 ```bash
-wscat -c "wss://url/?sessionId=tN6L4cDFS&memberId=Vmp3ZUwm-Z"
+wscat -c "wss://wsApiUrl/?sessionId=tN6L4cDFS&memberId=Vmp3ZUwm-Z"
 ```
 
 Soon after successfully reconnecting, you should receive a [`SESSION_RECONNECT`](#session_reconnect) message
@@ -260,8 +278,9 @@ sam deploy --guided --profile=doodadgames # First time deployment
 sam deploy --profile=doodadgames
 ```
 
-You can find your API Gateway Endpoint URL in the output values displayed after deployment,
-or in API Gateway in the AWS console afterwards (API > Stages > Prod > WebSocket URL).
+You'll find API Gateway URLs in the output values after deployment,
+or in API Gateway in the AWS console afterwards (API > Stages > Prod > WebSocket URL for the WSS URL).
+There's one URL for the HTTPS API, and another for the WSS API.
 
 #### Down
 
