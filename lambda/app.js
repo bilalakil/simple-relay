@@ -211,23 +211,25 @@ const joinSession = async (event) => {
   const hostingPrivate = !!qs.private;
   const joiningPrivate = !!qs.sessionId;
   const pblc = !hostingPrivate && !joiningPrivate;
-  let isNewPublic = false;
 
   let sessionId = joiningPrivate ? qs.sessionId : newId();
   const memberId = newId();
-  const openSessionId = getOpenSessionId(qs.sessionType, targetNumMembers);
 
   const newMember = { M: { memberId: { S: memberId }, connId: { S: connId } } };
   const expireAfter = { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() };
 
+  let newNumWaiting = 1;
+  const openSessionId = getOpenSessionId(qs.sessionType, targetNumMembers);
   // If public, check if there's an open session
   if (pblc) {
     const openSession = await getSession(openSessionId);
-    if (openSession.Item) sessionId = openSession.Item.openSessionId.S;
-    else isNewPublic = true;
+    if (openSession.Item) {
+      sessionId = openSession.Item.openSessionId.S;
+      newNumWaiting = parseInt(openSession.Item.numWaiting.N, 10) + 1;
+    }
   }
 
-  const isNew = isNewPublic || hostingPrivate;
+  const isNew = (pblc && newNumWaiting === 1) || hostingPrivate;
 
   try {
     await transactWriteItems({
@@ -262,38 +264,65 @@ const joinSession = async (event) => {
               ':newMember': { L: [newMember] },
               ':expireAfter': expireAfter,
               ...(isNew ? {
-                ':targetNumMembers': { N: targetNumMembers.toString() },
                 ':type': { S: qs.sessionType },
+                ':targetNumMembers': { N: targetNumMembers.toString() },
                 ...(hostingPrivate ? { ':true': { BOOL: true } } : {}),
               } : {}),
             },
             ...(isNew ? { ExpressionAttributeNames: { '#type': 'type' } } : {}),
           },
         },
-        ...(isNewPublic ? [{
-          Put: {
-            TableName: SESSION_TABLE_NAME,
-            Item: {
-              id: { S: openSessionId },
-              openSessionId: { S: sessionId },
-              expireAfter,
-            },
-            ConditionExpression: 'attribute_not_exists(id) OR openSessionId = :sessionId',
-            ExpressionAttributeValues: { ':sessionId': { S: sessionId } },
-          },
-        }] : []),
+        ...(pblc ? ( // eslint-disable-line no-nested-ternary
+          newNumWaiting !== targetNumMembers
+            ? [{
+              Update: {
+                TableName: SESSION_TABLE_NAME,
+                Key: { id: { S: openSessionId } },
+                UpdateExpression: `
+                  SET openSessionId = :sessionId,
+                    expireAfter = :expireAfter
+                  ADD numWaiting :one
+                `,
+                ConditionExpression: `
+                  attribute_not_exists(id)
+                  OR (
+                    openSessionId = :sessionId
+                    AND numWaiting < :targetNumMembersMinus1
+                  )
+                `,
+                ExpressionAttributeValues: {
+                  ':sessionId': { S: sessionId },
+                  ':expireAfter': expireAfter,
+                  ':targetNumMembersMinus1': { N: (targetNumMembers - 1).toString() },
+                  ':one': { N: '1' },
+                },
+              },
+            }]
+            : [{
+              Delete: {
+                TableName: SESSION_TABLE_NAME,
+                Key: { id: { S: openSessionId } },
+                ConditionExpression: 'numWaiting = :targetNumMembersMinus1',
+                ExpressionAttributeValues: {
+                  ':targetNumMembersMinus1': { N: (targetNumMembers - 1).toString() },
+                },
+              },
+            }]
+        ) : []),
       ],
     });
   } catch (e) {
     if (e.code === 'TransactionCanceledException') {
       if (e.cancellationReasons[1].Code === 'ConditionalCheckFailed') return softError();
-      if (e.cancellationReasons[2].Code === 'ConditionalCheckFailed') return retryError();
+      if (
+        e.cancellationReasons[2]
+        && e.cancellationReasons[2].Code === 'ConditionalCheckFailed'
+      ) return retryError();
     }
     throw e;
   }
 
   // Members are notified of session start via `sessionMembersChangedHandler`
-  // Open sessions for full sessions are deleted via `sessionMembersChangedHandler`
 
   return success;
 };
@@ -384,39 +413,84 @@ const disconnect = async (event) => {
   const targetNumMembers = parseInt(session.Item.targetNumMembers.N, 10);
   const rawMembers = session.Item.members.L;
   const started = rawMembers.length >= targetNumMembers;
+  const openSessionId = getOpenSessionId(session.Item.type.S, targetNumMembers);
 
   const { memberId, memberNum } = getMember(rawMembers, { connId });
   if (memberNum === -1) return success;
 
   // If the game's not started and we're the only person in it...
   if (!started && rawMembers.length === 1) {
-    await Promise.all([
-    // ... then delete the session
-      delSession(sessionId),
-
-      ...(!priv ? [ // ... and the open session (if it's public)
-        delSession(getOpenSessionId(session.Item.type.S, targetNumMembers)),
-      ] : []),
-    ]);
-  } else { // Otherwise...
-    // ... update the session member list
     try {
-      await DDB.updateItem({
-        TableName: SESSION_TABLE_NAME,
-        Key: { id: { S: sessionId } },
-        UpdateExpression: started
-          ? `REMOVE members[${memberNum}].connId`
-          : `REMOVE members[${memberNum}]`,
-        ...(!started ? {
-          ConditionExpression: `
-            size(members) < targetNumMembers
-            AND members[${memberNum}].memberId = :memberId
-          `,
-          ExpressionAttributeValues: {
-            ':memberId': { S: memberId },
+      await transactWriteItems({
+        TransactItems: [
+          {
+            // ... delete the session
+            Delete: {
+              TableName: SESSION_TABLE_NAME,
+              Key: { id: { S: sessionId } },
+              ConditionExpression: `
+                size(members) = :one
+                AND members[0].memberId = :memberId
+              `,
+              ExpressionAttributeValues: {
+                ':memberId': { S: memberId },
+                ':one': { N: '1' },
+              },
+            },
           },
-        } : {}),
-      }).promise();
+          // ... and also the open session (for public games)
+          ...(!priv ? [{
+            Delete: {
+              TableName: SESSION_TABLE_NAME,
+              Key: { id: { S: openSessionId } },
+              ConditionExpression: 'numWaiting = :one',
+              ExpressionAttributeValues: { ':one': { N: '1' } },
+            },
+          }] : []),
+        ],
+      });
+    } catch (e) {
+      if (e.code === 'TransactionCanceledException') return retryError();
+      throw e;
+    }
+  } else { // Otherwise...
+    try {
+      await transactWriteItems({
+        TransactItems: [
+          {
+            // ... update the session member list
+            Update: {
+              TableName: SESSION_TABLE_NAME,
+              Key: { id: { S: sessionId } },
+              UpdateExpression: started
+                ? `REMOVE members[${memberNum}].connId`
+                : `REMOVE members[${memberNum}]`,
+              ...(!started ? {
+                ConditionExpression: `
+                  size(members) < targetNumMembers
+                  AND members[${memberNum}].memberId = :memberId
+                `,
+                ExpressionAttributeValues: {
+                  ':memberId': { S: memberId },
+                },
+              } : {}),
+            },
+          },
+          // ... and also the open session (for pending public games)
+          ...(!priv && !started ? [{
+            Update: {
+              TableName: SESSION_TABLE_NAME,
+              Key: { id: { S: openSessionId } },
+              UpdateExpression: 'ADD numWaiting :minusOne',
+              ConditionExpression: 'numWaiting > :one',
+              ExpressionAttributeValues: {
+                ':one': { N: '1' },
+                ':minusOne': { N: '-1' },
+              },
+            },
+          }] : []),
+        ],
+      });
     } catch (e) {
       if (e.code === 'ConditionalCheckFailedException') return retryError();
       throw e;
@@ -762,12 +836,6 @@ exports.sessionMembersChangedHandler = async (event) => {
           newRawMembers.length,
         ),
       )),
-
-      // ... and delete open session if public
-      ...(!priv ? [delSession(getOpenSessionId(
-        session.type.S,
-        session.targetNumMembers.N,
-      ))] : []),
     );
   }
 
@@ -791,7 +859,7 @@ exports.sessionMembersChangedHandler = async (event) => {
             cm.M.connId.S,
             rm.connId === cm.M.connId.S
               ? getMessageSessionReconnect(
-                connectedRawMembers,
+                newRawMembers,
                 rm.memberNum,
                 session.pinnedMessage && session.pinnedMessage.M,
               )

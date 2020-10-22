@@ -45,8 +45,10 @@ Resources:
       #   AttributeType: S
       # - AttributeName: expireAfter
       #   AttributeType: N
-      # - AttributeName: openSessionId
+      # - AttributeName: openSessionId # only for open session pointer
       #   AttributeType: S
+      # - AttributeName: numWaiting # only for open session pointer
+      #   AttributeType: N
       # - AttributeName: members # { M: { memberId: { S: <str> }[, connId: { S: <str> }] } }
       #   AttributeType: L
       # - AttributeName: targetNumMembers
