@@ -116,11 +116,18 @@ Use them to provide game state required to bring the game up to date upon reconn
 ```json
 {
     "action": "HEARTBEAT",
-    "inclMessagesAfter": 1596933878705
+    "inclMessagesAfter": 1596933878705,
+    "waitingFor": ["PRIVATE_SESSION_PENDING", "SESSION_START", "SESSION_RECONNECT"]
 }
 ```
 
-`inclMessagesAfter` is optional.
+`inclMessagesAfter` and `waitingFor` are optional.
+
+`waitingFor` accepts a list of strings, with the three relevant string values listed in the example.
+If included with the heartbeat, those messages will be sent back to the client with the heartbeat response
+(if they should've been sent in the first place).
+Thus this can be used to alleviate potential gaps in message communication.
+
 See [`HEARTBEAT` (Messages)](#heartbeat-1) for an example response.
 
 #### `END_SESSION`
@@ -197,29 +204,51 @@ Note that messages are always contained in an array, as multiple may be sent in 
 
 #### `HEARTBEAT`
 
-```json
+```js
 [
     {
         "type": "HEARTBEAT"
     },
     {
-        "memberNum": "0",
-        "payload": "Hi",
-        "pinned": true,
-        "time": "1596933878706",
         "type": "MESSAGE"
+        // ...
+        // Only if `inclMessagesAfter` is lower than the time of the session's pinned message
+        // See `MESSAGE` for example
+    },
+    {
+        "type": "PRIVATE_SESSION_PENDING"
+        // ...
+        // Only if `waitingFor` includes `PRIVATE_SESSION_PENDING` (and valid)
+        // See `PRIVATE_SESSION_PENDING` for example
+    },
+    {
+        "type": "SESSION_START"
+        // ...
+        // Only if `waitingFor` includes `SESSION_START` (and valid)
+        // See `SESSION_START` for example
+    },
+    {
+        "type": "SESSION_RECONNECT"
+        // ...
+        // Only if `waitingFor` includes `SESSION_RECONNECT` (and valid)
+        // See `SESSION_RECONNECT` for example
     }
 ]
 ```
 
-The heartbeat message itself is dumb, it simply informs you that the server received your beat.
+The heartbeat message simply informs you that the server received your beat,
+but can be used to fetch potentially missed information.
 
-However, if `inclMessagesAfter` is set in [the action](#heartbeat),
+If `inclMessagesAfter` is set in [the action](#heartbeat),
 any messages stored (currently only a pinned message) after that time will sent as additional array elements,
 which are in the same format as [regular messages](#message).
 
 Currently only pinned messages are stored by Simple Relay, and so only they could be returned.
 In future, if all messages are stored (not only pinned), then all relevant ones would be included here too.
+
+If `waitingFor` is set in [the action](#heartbeat)
+then various different pieces of information may be sent with the heartbeat,
+according to what is listed in `waitingFor`, and the current state of the session.
 
 #### `MEMBER_DISCONNECT`
 
@@ -304,9 +333,8 @@ Exercise care if you've multiple active SAM applications active.
 Until these are all done, the presence of this code on GitHub serves more as a personal backup than anything else.
 
 - Confirm `sessionMembersChangedHandler` is executed once per change - not ever bundled with multiple changes
-- Confirm how `getItem` and `putItem` handle failed conditions: do they throw or return empty?
+- Improve error handling
 - Make lambda retry when appropriate
-- Ensure lambdas are organised in consideration of retries
 - Improve/DRY up lambda and template code
 - Fault tolerance analysis (race conditions; websocket frame drops; catastrophic failures)
 - Improve documentation
