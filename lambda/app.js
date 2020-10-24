@@ -595,7 +595,7 @@ const heartbeat = async (conn, body) => {
   if (!(
     Number.isNaN(inclMessagesAfter)
     || !pinned
-    || pinned.M.time.N <= inclMessagesAfter
+    || pinned.time.N <= inclMessagesAfter
   )) {
     messages.push(getMessageMessage(
       pinned.payload.S,
@@ -650,7 +650,7 @@ const heartbeat = async (conn, body) => {
 const sendMessage = async (conn, body) => {
   if (
     typeof body.payload !== 'string'
-    || (typeof body.pinned).indexOf('undefined', 'boolean') === -1
+    || ['undefined', 'boolean'].indexOf(typeof body.pinned) === -1
   ) return softError();
 
   const now = Date.now();
