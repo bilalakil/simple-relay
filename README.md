@@ -1,5 +1,7 @@
 # Simple Relay
 
+_Version: 0.1.0_
+
 A relay server designed especially for usage in low-communication indie games. Themes:
 
 - Intended for early-stage indie games to provide them with rapid multiplayer iteration times
