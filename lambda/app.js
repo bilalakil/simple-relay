@@ -75,7 +75,7 @@ const getMemberRecord = (memberId, sessionId, connId) => ({
   Item: {
     id: { S: memberId },
     sessionId: { S: sessionId },
-    connectionId: { S: connId },
+    connId: { S: connId },
     expireAfter: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS),
   },
 });
@@ -933,9 +933,9 @@ exports.sessionMembersChangedHandler = async (event) => {
 
     // Notify members of reconnection
     if (reconnectedMembers.length !== 0) {
-      reconnectedMembers.forEach((rm) => connectedRawMembers.forEach((
+      reconnectedMembers.forEach((rm) => connectedRawMembers.forEach(
         (cm) => addMessage(
-          cm.M.connId.S,
+          cm,
           rm.connId === cm.M.connId.S
             ? getMessageSessionReconnect(
               newRawMembers,
@@ -946,8 +946,8 @@ exports.sessionMembersChangedHandler = async (event) => {
               type: 'MEMBER_RECONNECT',
               memberNum: rm.memberNum,
             },
-        )
-      )));
+        ),
+      ));
     }
   }
 
@@ -972,7 +972,7 @@ exports.notifyDisconnectHandler = async (event) => {
 
   if (!memberRecord) return success;
 
-  const connId = memberRecord.connectionId.S;
+  const connId = memberRecord.connId.S;
   await APIGW.deleteConnection({ ConnectionId: connId }).promise();
 
   return success;

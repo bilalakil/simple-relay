@@ -25,7 +25,7 @@ Resources:
         AttributeType: S
       # - AttributeName: sessionId
       #   AttributeType: S
-      # - AttributeName: connectionId
+      # - AttributeName: connId
       #   AttributeType: S
       # - AttributeName: expireAfter
       #  AttributeType: N
