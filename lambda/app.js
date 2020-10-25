@@ -921,7 +921,7 @@ exports.sessionMembersChangedHandler = async (event) => {
 
   const connectedRawMembers = newRawMembers.filter((_) => _.M.connId);
 
-  if (newRawMembers.length === oldRawMembers.length) {
+  if (sessionStarted && newRawMembers.length === oldRawMembers.length) {
     const reconnectedMembers = newRawMembers
       .filter((_, i) => {
         const thisConnS = _.M.connId && _.M.connId.S;
