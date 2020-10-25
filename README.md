@@ -172,7 +172,7 @@ Note that messages are always contained in an array, as multiple may be sent in 
 
 This message is provided as soon as possible following web socket connection.
 
-The member ID can be used to [rejoin the session](#rejoin-sesion) in future
+The member ID can be used to [rejoin the session](#rejoin-session) in future
 and should be treated as securely as possible,
 since if it was shared then other clients would be able to spoof your user,
 and send/receive messages as though they were you.
