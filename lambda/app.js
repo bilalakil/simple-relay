@@ -3,14 +3,22 @@ const AWS = require('aws-sdk');
 
 shortid.characters('0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_');
 
-const DDB = new AWS.DynamoDB({ apiVersion: '2012-10-08' });
-let APIGW;
-
 const {
+  MEMBER_TABLE_NAME,
   CONNECTION_TABLE_NAME,
   SESSION_TABLE_NAME,
-  APIGW_ENDPOINT, // Not set/needed in `webSocketHandler`
+  WS_APIGW_ENDPOINT, // Not present on WebSocketLambda
 } = process.env;
+
+const DDB = new AWS.DynamoDB({ apiVersion: '2012-10-08' });
+
+let APIGW;
+const setUpAPIGW = (endpoint) => {
+  APIGW = new AWS.ApiGatewayManagementApi({
+    apiVersion: '2018-11-29',
+    endpoint,
+  });
+};
 
 // Not set/needed in `sessionMembersChangedHandler`
 const CONNECTION_EXPIRE_AFTER_SECONDS = parseInt(process.env.CONNECTION_EXPIRE_AFTER_SECONDS, 10);
@@ -39,7 +47,9 @@ const getOpenSessionId = (type, targetNumMembers) => (
   OPEN_SESSION_ID + SEP + type + SEP + targetNumMembers.toString()
 );
 
-const getExpirationTime = (afterSeconds) => Math.floor(Date.now() / 1000) + afterSeconds;
+const getExpirationTime = (afterSeconds) => ({
+  N: (Math.floor(Date.now() / 1000) + afterSeconds).toString(),
+});
 
 const getMember = (rawMemberList, { memberId, connId }) => {
   const memberNum = rawMemberList.findIndex(
@@ -59,6 +69,19 @@ const getMember = (rawMemberList, { memberId, connId }) => {
     ...(rawMember.M.connId ? { connId: rawMember.M.connId.S } : {}),
   };
 };
+
+const getMemberRecord = (memberId, sessionId, connId) => ({
+  TableName: MEMBER_TABLE_NAME,
+  Item: {
+    id: { S: memberId },
+    sessionId: { S: sessionId },
+    connectionId: { S: connId },
+    expireAfter: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS),
+  },
+});
+const updateMemberRecord = (memberId, sessionId, connId) => DDB.putItem(
+  getMemberRecord(memberId, sessionId, connId),
+).promise();
 
 const transactWriteItems = (params) => {
   const trans = DDB.transactWriteItems(params);
@@ -97,7 +120,7 @@ const updateConnExpiration = async (connId) => {
       Key: { id: { S: connId } },
       UpdateExpression: 'SET expireAfter = :expireAfter',
       ExpressionAttributeValues: {
-        ':expireAfter': { N: getExpirationTime(CONNECTION_EXPIRE_AFTER_SECONDS).toString() },
+        ':expireAfter': getExpirationTime(CONNECTION_EXPIRE_AFTER_SECONDS),
       },
       ConditionExpression: 'attribute_exists(id)',
       ReturnValues: 'ALL_OLD',
@@ -155,12 +178,11 @@ const getMessagePrivateSessionPending = (sessionId, targetNumMembers) => ({
   targetNumMembers,
 });
 
-const getMessageSessionStart = (sessionType, sessionId, memberNum, memberId, numMembers) => ({
+const getMessageSessionStart = (sessionType, sessionId, memberNum, numMembers) => ({
   type: 'SESSION_START',
   sessionType,
   sessionId,
   memberNum,
-  memberId,
   numMembers,
 });
 
@@ -216,7 +238,7 @@ const joinSession = async (event) => {
   const memberId = newId();
 
   const newMember = { M: { memberId: { S: memberId }, connId: { S: connId } } };
-  const expireAfter = { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() };
+  const expireAfter = getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS);
 
   let newNumWaiting = 1;
   const openSessionId = getOpenSessionId(qs.sessionType, targetNumMembers);
@@ -234,13 +256,14 @@ const joinSession = async (event) => {
   try {
     await transactWriteItems({
       TransactItems: [
+        { Put: { ...getMemberRecord(memberId, sessionId, connId) } },
         {
           Put: {
             TableName: CONNECTION_TABLE_NAME,
             Item: {
               id: { S: connId },
               sessionId: { S: sessionId },
-              expireAfter,
+              expireAfter: getExpirationTime(CONNECTION_EXPIRE_AFTER_SECONDS),
             },
           },
         },
@@ -313,10 +336,10 @@ const joinSession = async (event) => {
     });
   } catch (e) {
     if (e.code === 'TransactionCanceledException') {
-      if (e.cancellationReasons[1].Code === 'ConditionalCheckFailed') return softError();
+      if (e.cancellationReasons[2].Code === 'ConditionalCheckFailed') return softError();
       if (
-        e.cancellationReasons[2]
-        && e.cancellationReasons[2].Code === 'ConditionalCheckFailed'
+        e.cancellationReasons[3]
+        && e.cancellationReasons[3].Code === 'ConditionalCheckFailed'
       ) return retryError();
     }
     throw e;
@@ -332,10 +355,18 @@ const rejoinSession = async (event) => {
   const connId = event.requestContext.connectionId;
 
   // Validate input
-  // `?sessionId=<string>&memberId=<string>`
-  if (!(qs.sessionId && qs.memberId)) return softError();
+  // `?memberId=<string>`
+  if (!qs.memberId) return softError();
 
-  const session = await getSession(qs.sessionId);
+  const memberRecord = (await (DDB.getItem({
+    TableName: MEMBER_TABLE_NAME,
+    Key: { id: { S: qs.memberId } },
+  }).promise())).Item;
+
+  if (!memberRecord) return softError();
+
+  const sessionId = memberRecord.sessionId.S;
+  const session = await getSession(sessionId);
 
   if (!session.Item) return softError();
   const rawMembers = session.Item.members.L;
@@ -347,43 +378,54 @@ const rejoinSession = async (event) => {
 
   if (memberNum === -1) return softError();
   const newMember = { M: { memberId: { S: qs.memberId }, connId: { S: connId } } };
-  const expireAfter = { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() };
+  const expireAfter = getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS);
+
+  const transaction = transactWriteItems({
+    TransactItems: [
+      { Put: { ...getMemberRecord(qs.memberId, sessionId, connId) } },
+      {
+        Put: {
+          TableName: CONNECTION_TABLE_NAME,
+          Item: {
+            id: { S: connId },
+            sessionId: { S: sessionId },
+            expireAfter,
+          },
+        },
+      },
+      {
+        Update: {
+          TableName: SESSION_TABLE_NAME,
+          Key: { id: { S: sessionId } },
+          UpdateExpression: `
+            SET members[${memberNum}] = :newMember,
+              expireAfter = :expireAfter
+          `,
+          ConditionExpression: `members[${memberNum}].memberId = :memberId`,
+          ExpressionAttributeValues: {
+            ':memberId': { S: qs.memberId },
+            ':newMember': newMember,
+            ':expireAfter': expireAfter,
+          },
+        },
+      },
+      ...(oldConnId ? [{
+        Delete: {
+          TableName: CONNECTION_TABLE_NAME,
+          Key: { id: { S: oldConnId } },
+        },
+      }] : []),
+    ],
+  }).catch((e) => {
+    if (
+      e.code === 'TransactionCanceledException'
+      && e.cancellationReasons[2].Code === 'ConditionalCheckFailed'
+    ) return retryError();
+    throw e;
+  });
 
   await Promise.all([
-    transactWriteItems({
-      TransactItems: [
-        {
-          Put: {
-            TableName: CONNECTION_TABLE_NAME,
-            Item: {
-              id: { S: connId },
-              sessionId: { S: qs.sessionId },
-              expireAfter,
-            },
-          },
-        },
-        {
-          Update: {
-            TableName: SESSION_TABLE_NAME,
-            Key: { id: { S: qs.sessionId } },
-            UpdateExpression: `
-              SET members[${memberNum}] = :newMember,
-                expireAfter = :expireAfter
-            `,
-            ExpressionAttributeValues: {
-              ':newMember': newMember,
-              ':expireAfter': expireAfter,
-            },
-          },
-        },
-        ...(oldConnId ? [{
-          Delete: {
-            TableName: CONNECTION_TABLE_NAME,
-            Key: { id: { S: oldConnId } },
-          },
-        }] : []),
-      ],
-    }),
+    transaction,
     ...(oldConnId ? [communicate(oldConnId, { type: 'CONNECTION_OVERWRITE' })] : []),
   ]);
 
@@ -418,6 +460,13 @@ const disconnect = async (event) => {
   const { memberId, memberNum } = getMember(rawMembers, { connId });
   if (memberNum === -1) return success;
 
+  const deleteMemberInstruction = {
+    Delete: {
+      TableName: MEMBER_TABLE_NAME,
+      Key: { id: { S: memberId } },
+    },
+  };
+
   // If the game's not started and we're the only person in it...
   if (!started && rawMembers.length === 1) {
     try {
@@ -438,6 +487,8 @@ const disconnect = async (event) => {
               },
             },
           },
+          // ... delete the member
+          { ...deleteMemberInstruction },
           // ... and also the open session (for public games)
           ...(!priv ? [{
             Delete: {
@@ -476,6 +527,8 @@ const disconnect = async (event) => {
               } : {}),
             },
           },
+          // ... delete the member (if the session hasn't started)
+          ...(!started ? [deleteMemberInstruction] : []),
           // ... and also the open session (for pending public games)
           ...(!priv && !started ? [{
             Update: {
@@ -522,6 +575,11 @@ const endSession = async (connId) => {
     Key: { id: { S: connId } },
   }).promise());
 
+  if (!conn.Item) {
+    await sendInvalidConnection(conn.Item.id.S);
+    return softError();
+  }
+
   const session = await delSession(conn.Item.sessionId.S, { ReturnValues: 'ALL_OLD' });
 
   if (!session.Attributes) {
@@ -531,15 +589,17 @@ const endSession = async (connId) => {
 
   const comms = commToAllMembers(session.Attributes.members.L, { type: 'SESSION_END' });
 
-  const delConns = DDB.batchWriteItem({
+  const delMembersNConns = DDB.batchWriteItem({
     RequestItems: {
+      [MEMBER_TABLE_NAME]: session.Attributes.members.L
+        .map((_) => ({ DeleteRequest: { Key: { id: { S: _.M.memberId.S } } } })),
       [CONNECTION_TABLE_NAME]: session.Attributes.members.L
         .filter((_) => _.M.connId)
         .map((_) => ({ DeleteRequest: { Key: { id: { S: _.M.connId.S } } } })),
     },
   }).promise();
 
-  await Promise.all([comms, delConns]);
+  await Promise.all([comms, delMembersNConns]);
 
   return success;
 };
@@ -564,21 +624,23 @@ const heartbeat = async (conn, body) => {
     )
   ) return softError();
 
+  const expireAfter = getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS);
+  const connId = conn.Attributes.id.S;
+  const sessionId = conn.Attributes.sessionId.S;
+
   let session;
   try {
     session = (await (DDB.updateItem({
       TableName: SESSION_TABLE_NAME,
-      Key: { id: { S: conn.Attributes.sessionId.S } },
+      Key: { id: { S: sessionId } },
       UpdateExpression: 'SET expireAfter = :expireAfter',
-      ExpressionAttributeValues: {
-        ':expireAfter': { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() },
-      },
+      ExpressionAttributeValues: { ':expireAfter': expireAfter },
       ConditionExpression: 'attribute_exists(id)',
       ReturnValues: 'ALL_OLD',
     }).promise())).Attributes;
   } catch (e) {
     if (e.code === 'ConditionalCheckFailedException') {
-      await sendInvalidConnection(conn.Attributes.id.S);
+      await sendInvalidConnection(connId);
       return success;
     }
     throw e;
@@ -623,7 +685,6 @@ const heartbeat = async (conn, body) => {
       session.type.S,
       session.id.S,
       memberNum,
-      memberId,
       targetNumMembers,
     ));
   }
@@ -639,7 +700,10 @@ const heartbeat = async (conn, body) => {
     ));
   }
 
-  await communicate(conn.Attributes.id.S, messages);
+  await Promise.all([
+    communicate(conn.Attributes.id.S, messages),
+    updateMemberRecord(memberId, sessionId, connId),
+  ]);
 
   return success;
 };
@@ -654,15 +718,19 @@ const sendMessage = async (conn, body) => {
   ) return softError();
 
   const now = Date.now();
+  const connId = conn.Attributes.id.S;
+  const sessionId = conn.Attributes.sessionId.S;
 
-  const session = await getSession(conn.Attributes.sessionId.S);
+  const session = await getSession(sessionId);
   if (!session.Item) {
-    await sendInvalidConnection(conn.Attributes.id.S);
+    await sendInvalidConnection(connId);
     return success;
   }
 
   const rawMembers = session.Item.members.L;
-  const { memberNum } = getMember(rawMembers, { connId: conn.Attributes.id.S });
+  const { memberId, memberNum } = getMember(rawMembers, { connId });
+
+  const updateMemberPromise = updateMemberRecord(memberId, sessionId, connId);
 
   try {
     await (DDB.updateItem({
@@ -673,7 +741,7 @@ const sendMessage = async (conn, body) => {
           ${body.pinned ? ', pinnedMessage = :pinnedMessage' : ''}
       `,
       ExpressionAttributeValues: {
-        ':expireAfter': { N: getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS).toString() },
+        ':expireAfter': getExpirationTime(SESSION_EXPIRE_AFTER_SECONDS),
         ...(body.pinned ? {
           ':pinnedMessage': {
             M: {
@@ -694,15 +762,18 @@ const sendMessage = async (conn, body) => {
     throw e;
   }
 
-  await commToAllMembers(
-    rawMembers,
-    getMessageMessage(
-      body.payload,
-      now,
-      memberNum,
-      body.pinned,
+  await Promise.all([
+    commToAllMembers(
+      rawMembers,
+      getMessageMessage(
+        body.payload,
+        now,
+        memberNum,
+        body.pinned,
+      ),
     ),
-  );
+    updateMemberPromise,
+  ]);
 
   return success;
 };
@@ -714,10 +785,7 @@ const sendMessage = async (conn, body) => {
  * - `event.body` (available on `$default` only)
  */
 exports.webSocketHandler = async (event) => {
-  APIGW = new AWS.ApiGatewayManagementApi({
-    apiVersion: '2018-11-29',
-    endpoint: `${event.requestContext.domainName}/${event.requestContext.stage}`,
-  });
+  setUpAPIGW(`${event.requestContext.domainName}/${event.requestContext.stage}`);
 
   const route = event.requestContext.routeKey;
 
@@ -786,10 +854,7 @@ This lambda performs the following tasks when appropriate:
 - Notify members of reconnection
  */
 exports.sessionMembersChangedHandler = async (event) => {
-  APIGW = new AWS.ApiGatewayManagementApi({
-    apiVersion: '2018-11-29',
-    endpoint: APIGW_ENDPOINT,
-  });
+  setUpAPIGW(WS_APIGW_ENDPOINT);
 
   const changes = event.Records[0].dynamodb;
   const session = changes.NewImage;
@@ -808,35 +873,50 @@ exports.sessionMembersChangedHandler = async (event) => {
 
   if (!membersChanged) return success;
 
+  const messages = {};
+  const addMessage = (memberRaw, payload) => {
+    const connId = memberRaw.M.connId.S;
+    if (!messages[connId]) messages[connId] = [];
+    messages[connId].push(payload);
+  };
+
+  const membersThatJustJoined = newRawMembers.filter(
+    (nm) => oldRawMembers.findIndex(
+      (om) => om.M.memberId.S === nm.M.memberId.S,
+    ) === -1,
+  );
+
+  // Notify new members of their details
+  membersThatJustJoined.forEach(
+    (_) => addMessage(_, {
+      type: 'CONNECTION',
+      memberId: _.M.memberId.S,
+    }),
+  );
+
   // Notify new private session members of session details
-  if (
-    newRawMembers.length === oldRawMembers.length + 1
-    && newRawMembers.length !== targetNumMembers
-    && priv
-  ) {
-    await communicate(
-      newRawMembers[newRawMembers.length - 1].M.connId.S,
-      getMessagePrivateSessionPending(
-        session.id.S,
-        targetNumMembers,
-      ),
+  if (!sessionStarted && priv) {
+    const privateSessionPendingMessage = getMessagePrivateSessionPending(
+      session.id.S,
+      targetNumMembers,
+    );
+
+    membersThatJustJoined.forEach(
+      (_) => addMessage(_, privateSessionPendingMessage),
     );
   }
 
   // Notify members that the session has started
   if (sessionJustStarted) {
-    await Promise.all(
-      newRawMembers.map((_, i) => communicate(
-        _.M.connId.S,
-        getMessageSessionStart(
-          session.type.S,
-          session.id.S,
-          i,
-          _.M.memberId.S,
-          newRawMembers.length,
-        ),
-      )),
-    );
+    newRawMembers.forEach((_, i) => addMessage(
+      _,
+      getMessageSessionStart(
+        session.type.S,
+        session.id.S,
+        i,
+        newRawMembers.length,
+      ),
+    ));
   }
 
   const connectedRawMembers = newRawMembers.filter((_) => _.M.connId);
@@ -853,27 +933,47 @@ exports.sessionMembersChangedHandler = async (event) => {
 
     // Notify members of reconnection
     if (reconnectedMembers.length !== 0) {
-      await Promise.all(
-        reconnectedMembers.map((rm) => Promise.all(connectedRawMembers.map((
-          (cm) => communicate(
-            cm.M.connId.S,
-            rm.connId === cm.M.connId.S
-              ? getMessageSessionReconnect(
-                newRawMembers,
-                rm.memberNum,
-                session.pinnedMessage && session.pinnedMessage.M,
-              )
-              : {
-                type: 'MEMBER_RECONNECT',
-                memberNum: rm.memberNum,
-              },
-          )
-        )))),
-      );
+      reconnectedMembers.forEach((rm) => connectedRawMembers.forEach((
+        (cm) => addMessage(
+          cm.M.connId.S,
+          rm.connId === cm.M.connId.S
+            ? getMessageSessionReconnect(
+              newRawMembers,
+              rm.memberNum,
+              session.pinnedMessage && session.pinnedMessage.M,
+            )
+            : {
+              type: 'MEMBER_RECONNECT',
+              memberNum: rm.memberNum,
+            },
+        )
+      )));
     }
   }
+
+  await Promise.all(
+    Object.keys(messages)
+      .map((connId) => communicate(connId, messages[connId])),
+  );
 
   return success;
 };
 
 exports.pingHandler = () => new Promise((r) => r({ statusCode: 200, body: 'pong' }));
+
+exports.notifyDisconnectHandler = async (event) => {
+  setUpAPIGW(WS_APIGW_ENDPOINT);
+
+  const { memberId } = event.pathParameters;
+  const memberRecord = (await (DDB.getItem({
+    TableName: MEMBER_TABLE_NAME,
+    Key: { id: { S: memberId } },
+  }).promise())).Item;
+
+  if (!memberRecord) return success;
+
+  const connId = memberRecord.connectionId.S;
+  await APIGW.deleteConnection({ ConnectionId: connId }).promise();
+
+  return success;
+};

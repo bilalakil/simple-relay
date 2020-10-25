@@ -6,17 +6,37 @@ Parameters:
   ConnectionExpireAfterSeconds:
     Type: Number
     Default: 1800
-    Description: (Required) The duration (in seconds) after which an innactive connection should be expire-able. Note that it will in fact be expired some time after.
+    Description: (Required) The duration (in seconds) after which an inactive connection should be expire-able. Note that it will in fact be expired some time after.
     MinValue: 1
     ConstraintDescription: Required. Must be greater than or equal to 1.
   SessionExpireAfterSeconds:
     Type: Number
     Default: 1800
-    Description: (Required) The duration (in seconds) after which an innactive session should be expire-able. Note that it will in fact be expired some time after.
+    Description: (Required) The duration (in seconds) after which an inactive session and its members should be expire-able. Note that it will in fact be expired some time after.
     MinValue: 1
     ConstraintDescription: Required. Must be greater than or equal to 1.
 
 Resources:
+  MemberTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      # - AttributeName: sessionId
+      #   AttributeType: S
+      # - AttributeName: connectionId
+      #   AttributeType: S
+      # - AttributeName: expireAfter
+      #  AttributeType: N
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      TableName: members # Update lambda if you change this
+      TimeToLiveSpecification:
+        AttributeName: expireAfter
+        Enabled: true
   ConnectionTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -74,11 +94,14 @@ Resources:
       Runtime: nodejs12.x
       Environment:
         Variables:
+          MEMBER_TABLE_NAME: members
           CONNECTION_TABLE_NAME: connections
           CONNECTION_EXPIRE_AFTER_SECONDS: !Ref ConnectionExpireAfterSeconds
           SESSION_TABLE_NAME: sessions
           SESSION_EXPIRE_AFTER_SECONDS: !Ref SessionExpireAfterSeconds
       Policies:
+      - DynamoDBCrudPolicy:
+          TableName: members
       - DynamoDBCrudPolicy:
           TableName: connections
       - DynamoDBCrudPolicy:
@@ -98,9 +121,12 @@ Resources:
       Runtime: nodejs12.x
       Environment:
         Variables:
+          WS_APIGW_ENDPOINT: !Sub '${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' 
+          MEMBER_TABLE_NAME: members
           CONNECTION_TABLE_NAME: connections
+          CONNECTION_EXPIRE_AFTER_SECONDS: !Ref ConnectionExpireAfterSeconds
           SESSION_TABLE_NAME: sessions
-          APIGW_ENDPOINT: !Sub '${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+          SESSION_EXPIRE_AFTER_SECONDS: !Ref SessionExpireAfterSeconds
       Events:
         TableEventSource:
           Type: DynamoDB
@@ -110,6 +136,8 @@ Resources:
             BatchSize: 1
             MaximumRetryAttempts: 2
       Policies:
+      - DynamoDBCrudPolicy:
+          TableName: members
       - DynamoDBCrudPolicy:
           TableName: connections
       - DynamoDBCrudPolicy:
@@ -133,6 +161,39 @@ Resources:
           Properties:
             Path: /ping
             Method: get
+  NotifyDisconnectLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: app.notifyDisconnectHandler
+      Runtime: nodejs12.x
+      Events:
+        Ping:
+          Type: Api
+          Properties:
+            Path: /notifyDisconnect/{memberId}
+            Method: get
+      Environment:
+        Variables:
+          WS_APIGW_ENDPOINT: !Sub '${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}' 
+          MEMBER_TABLE_NAME: members
+          CONNECTION_TABLE_NAME: connections
+          CONNECTION_EXPIRE_AFTER_SECONDS: !Ref ConnectionExpireAfterSeconds
+          SESSION_TABLE_NAME: sessions
+          SESSION_EXPIRE_AFTER_SECONDS: !Ref SessionExpireAfterSeconds
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName: members
+      - DynamoDBCrudPolicy:
+          TableName: connections
+      - DynamoDBCrudPolicy:
+          TableName: sessions
+      - Statement:
+        - Effect: Allow
+          Action:
+          - execute-api:ManageConnections
+          Resource:
+          - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*'
 
   WebSocketApi:
     Type: AWS::ApiGatewayV2::Api

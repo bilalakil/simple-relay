@@ -1,6 +1,6 @@
 # Simple Relay
 
-_Version: 0.1.0_
+_[SemVer](https://semver.org): 1.0.0_
 
 A relay server designed especially for usage in low-communication indie games. Themes:
 
@@ -58,7 +58,7 @@ then WSS connection issues are more likely to be fatal (i.e. session deleted).
 #### Join public session
 
 ```bash
-wscat -c "wss://wsApiUrl/?sessionType=kubblammo&targetNumMembers=2"
+wscat -c "wss://wsApiUrl/?sessionType=kubblammo_3.0.0&targetNumMembers=2"
 ```
 
 A successful WS connection means you're waiting for `targetNumMembers - 1` other members to also be waiting.
@@ -68,7 +68,7 @@ From then you can start sending messages to each other/performing other actions.
 #### Host private session
 
 ```bash
-wscat -c "wss://wsApiUrl/?sessionType=kubblammo&targetNumMembers=2&private=true"
+wscat -c "wss://wsApiUrl/?sessionType=kubblammo_3.0.0&targetNumMembers=2&private=true"
 ```
 
 The same post-connection behaviour applies as to when [joining a public session](#join-public-session).
@@ -79,7 +79,7 @@ containing the details you need to share with other people so they can join the 
 #### Join private session
 
 ```bash
-wscat -c "wss://wsApiUrl/?sessionType=kubblammo&sessionType=kubblammo&sessionId=IIFY26O6Q"
+wscat -c "wss://wsApiUrl/?sessionType=kubblammo_3.0.0&sessionId=IIFY26O6Q"
 ```
 
 The same post-connection behaviour applies as to when [hosting a private session](#host-private-session)
@@ -88,11 +88,26 @@ The same post-connection behaviour applies as to when [hosting a private session
 #### Rejoin session
 
 ```bash
-wscat -c "wss://wsApiUrl/?sessionId=tN6L4cDFS&memberId=Vmp3ZUwm-Z"
+wscat -c "wss://wsApiUrl/?memberId=Vmp3ZUwm-Z"
 ```
 
-Soon after successfully reconnecting, you should receive a [`SESSION_RECONNECT`](#session_reconnect) message
+This will re-establish your connection to any session that you were connected to in the past,
+including private/open sessions that were still pending more members.
+
+If your session had started, you should receive a [`SESSION_RECONNECT`](#session_reconnect) message
 which will include any pinned message and some session details.
+
+#### Notify of disconnection
+
+```bash
+curl https://httpsApiUrl/notifyDisconnection/{connectionId}
+```
+
+Web socket disconnection handling is a flakey thing.
+To minimise inconvenience to other users in the case that web socket disconnection failed
+(including to the same user, i.e. in case they match make with a past-disconnected-self),
+clients should explicitly notify the service of disconnection,
+especially if due to network failure.
 
 ### Actions
 
@@ -144,6 +159,24 @@ The server will send messages to connected clients.
 
 Note that messages are always contained in an array, as multiple may be sent in a single frame.
 
+#### `CONNECTION`
+
+```json
+[
+    {
+        "memberId": "MH5SyeCo7m",
+        "type": "CONNECTION"
+    }
+]
+```
+
+This message is provided as soon as possible following web socket connection.
+
+The member ID can be used to [rejoin the session](#rejoin-sesion) in future
+and should be treated as securely as possible,
+since if it was shared then other clients would be able to spoof your user,
+and send/receive messages as though they were you.
+
 #### `PRIVATE_SESSION_PENDING`
 
 ```json
@@ -159,14 +192,15 @@ Note that messages are always contained in an array, as multiple may be sent in 
 #### `SESSION_START`
 
 ```json
-{
-    "memberId": "MH5SyeCo7m",
-    "memberNum": 1,
-    "numMembers": 2,
-    "sessionId": "tp9ihEtjV",
-    "sessionType": "kubblammo",
-    "type": "SESSION_START"
-}
+[
+    {
+        "memberNum": 1,
+        "numMembers": 2,
+        "sessionId": "tp9ihEtjV",
+        "sessionType": "kubblammo_3.0.0",
+        "type": "SESSION_START"
+    }
+]
 ```
 
 #### `SESSION_RECONNECT`
@@ -281,17 +315,29 @@ according to what is listed in `waitingFor`, and the current state of the sessio
 [{"type":"SESSION_END"}]
 ```
 
+This is sent when a member issues the [`END_SESSION`](#end_session) action, and thus the session is terminated.
+
+You will not receive any more messages, and cannot issue any more actions, from this web socket.
+
 #### `CONNECTION_OVERWRITE`
 
 ```json
 [{"type":"CONNECTION_OVERWRITE"}]
 ```
 
+A new web socket connection with your member ID was made elsewhere, overwriting your current connection.
+
+You will not receive any more messages, and cannot issue any more actions, from this web socket.
+
 #### `INVALID_CONNECTION`
 
 ```json
 [{"type":"INVALID_CONNECTION"}]
 ```
+
+Your current web socket connection is invalid - you should attempt [rejoin the session](#rejoin-session).
+
+You will not receive any more messages, and cannot issue any more actions, from this web socket.
 
 ### Deployment
 
@@ -334,7 +380,6 @@ Exercise care if you've multiple active SAM applications active.
 
 Until these are all done, the presence of this code on GitHub serves more as a personal backup than anything else.
 
-- Confirm `sessionMembersChangedHandler` is executed once per change - not ever bundled with multiple changes
 - Improve error handling
 - Make lambda retry when appropriate
 - Improve/DRY up lambda and template code
