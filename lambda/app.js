@@ -973,7 +973,11 @@ exports.notifyDisconnectHandler = async (event) => {
   if (!memberRecord) return success;
 
   const connId = memberRecord.connId.S;
-  await APIGW.deleteConnection({ ConnectionId: connId }).promise();
+  try {
+    await APIGW.deleteConnection({ ConnectionId: connId }).promise();
+  } catch (e) {
+    if (e.statusCode !== 410) throw e;
+  }
 
   return success;
 };
