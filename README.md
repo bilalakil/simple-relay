@@ -100,7 +100,7 @@ which will include any pinned message and some session details.
 #### Notify of disconnection
 
 ```bash
-curl https://httpsApiUrl/notifyDisconnection/{connectionId}
+curl https://httpsApiUrl/notifyDisconnection/{memberId}
 ```
 
 Web socket disconnection handling is a flakey thing.
