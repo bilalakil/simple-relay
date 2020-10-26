@@ -223,7 +223,6 @@ const joinSession = async (event) => {
       )
     )
     && (typeof qs.private === 'undefined' || typeof qs.sessionId === 'undefined')
-    && (typeof qs.sessionId === 'undefined' || typeof qs.private === 'undefined')
   )) return softError();
 
   // Extract input
