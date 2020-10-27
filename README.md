@@ -1,6 +1,6 @@
 # Simple Relay
 
-_[SemVer](https://semver.org): 1.0.0_
+_[SemVer](https://semver.org): 2.0.0_
 
 A relay server designed especially for usage in low-communication indie games. Themes:
 
@@ -15,7 +15,7 @@ Caveats:
 
 - Most suitable for games that don't communicate often, otherwise may be expensive
 - Most suitable for non-realtime or slow/turn-based games, as latency will be likely be high
-- No server-side logic, just message passing.
+- No server-side logic, just message passing
 - No logic on the server means this is susceptible to hacking/fraud
     - If someone figures out how to send a message in your game, they can send any message they like
     - Note that this server is still "secure" (i.e. private/spoof-proof (AFAIK))
@@ -62,7 +62,7 @@ wscat -c "wss://wsApiUrl/?sessionType=kubblammo_3.0.0&targetNumMembers=2"
 ```
 
 A successful WS connection means you're waiting for `targetNumMembers - 1` other members to also be waiting.
-When that happens you'll all be put into a session and receive a [`SESSION_START`](#session_start) message.
+When that happens you'll all be put into a session and receive a [`SESSION_CONNECT`](#session_connect) message.
 From then you can start sending messages to each other/performing other actions.
 
 #### Host private session
@@ -89,13 +89,19 @@ The same post-connection behaviour applies as to when [hosting a private session
 
 ```bash
 wscat -c "wss://wsApiUrl/?memberId=Vmp3ZUwm-Z"
+# or
+wscat -c "wss://wsApiUrl/?memberId=Vmp3ZUwm-Z&sessionId=IIFY26O6Q"
 ```
 
 This will re-establish your connection to any session that you were connected to in the past,
 including private/open sessions that were still pending more members.
 
-If your session had started, you should receive a [`SESSION_RECONNECT`](#session_reconnect) message
+If your session had started, you should receive a [`SESSION_CONNECT`](#session_connect) message
 which will include any pinned message and some session details.
+
+By providing a session ID in addition to your member ID,
+a reconnection can be made even if your member details had expired due to inactivity
+(provided some other members kept the session alive).
 
 #### Notify of disconnection
 
@@ -123,9 +129,11 @@ Connected clients can send these messages to the server to perform various actio
 }
 ```
 
+Broadcasts the payload to all members that are connected to the session.
+
 If `pinned == true` then this will set/overwrite the session's pinned message.
 
-Pinned messages are included in [`SESSION_RECONNECT`](#session_reconnect) messages.
+Pinned messages are included in [`SESSION_CONNECT`](#session_connect) messages.
 Use them to provide game state required to bring the game up to date upon reconnection.
 
 #### `HEARTBEAT`
@@ -134,7 +142,7 @@ Use them to provide game state required to bring the game up to date upon reconn
 {
     "action": "HEARTBEAT",
     "inclMessagesAfter": 1596933878705,
-    "waitingFor": ["PRIVATE_SESSION_PENDING", "SESSION_START", "SESSION_RECONNECT"]
+    "waitingFor": ["CONNECTION","PRIVATE_SESSION_PENDING", "SESSION_CONNECT"]
 }
 ```
 
@@ -189,27 +197,13 @@ and send/receive messages as though they were you.
 ]
 ```
 
-#### `SESSION_START`
+#### `SESSION_CONNECT`
 
 ```json
 [
     {
         "memberNum": 1,
-        "numMembers": 2,
-        "sessionId": "tp9ihEtjV",
-        "sessionType": "kubblammo_3.0.0",
-        "type": "SESSION_START"
-    }
-]
-```
-
-#### `SESSION_RECONNECT`
-
-```json
-[
-    {
-        "memberNum": 0,
-        "members": [
+        "memberPresence": [
             true,
             true
         ],
@@ -219,7 +213,9 @@ and send/receive messages as though they were you.
             "pinned": true,
             "time": "1596006870314"
         },
-        "type": "SESSION_RECONNECT"
+        "sessionId": "tp9ihEtjV",
+        "sessionType": "kubblammo_3.0.0",
+        "type": "SESSION_START"
     }
 ]
 ```
@@ -248,26 +244,26 @@ and send/receive messages as though they were you.
     {
         "type": "MESSAGE"
         // ...
-        // Only if `inclMessagesAfter` is lower than the time of the session's pinned message
+        // Only if `inclMessagesAfter` is lower than the time of the session's pinned message.
         // See `MESSAGE` for example
+    },
+    {
+        "type": "CONNECTION"
+        // ...
+        // Only if `waitingFor` includes `CONNECTION`.
+        // See `CONNECTION` for example
     },
     {
         "type": "PRIVATE_SESSION_PENDING"
         // ...
-        // Only if `waitingFor` includes `PRIVATE_SESSION_PENDING` (and valid)
+        // Only if `waitingFor` includes `PRIVATE_SESSION_PENDING` (and valid).
         // See `PRIVATE_SESSION_PENDING` for example
     },
     {
-        "type": "SESSION_START"
+        "type": "SESSION_CONNECT"
         // ...
-        // Only if `waitingFor` includes `SESSION_START` (and valid)
-        // See `SESSION_START` for example
-    },
-    {
-        "type": "SESSION_RECONNECT"
-        // ...
-        // Only if `waitingFor` includes `SESSION_RECONNECT` (and valid)
-        // See `SESSION_RECONNECT` for example
+        // Only if `waitingFor` includes `SESSION_CONNECT` (and valid).
+        // See `SESSION_CONNECT` for example
     }
 ]
 ```

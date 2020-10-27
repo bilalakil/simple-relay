@@ -164,6 +164,11 @@ const commToAllMembers = (rawMembers, payload) => Promise.all(
 
 const sendInvalidConnection = (connId) => communicate(connId, { type: 'INVALID_CONNECTION' });
 
+const getMessageConnection = (memberId) => ({
+  type: 'CONNECTION',
+  memberId: memberId,
+});
+
 const getMessageMessage = (payload, time, memberNum, pinned) => ({
   type: 'MESSAGE',
   payload,
@@ -178,18 +183,15 @@ const getMessagePrivateSessionPending = (sessionId, targetNumMembers) => ({
   targetNumMembers,
 });
 
-const getMessageSessionStart = (sessionType, sessionId, memberNum, numMembers) => ({
-  type: 'SESSION_START',
+const getMessageSessionConnect = (
+  sessionType, sessionId, memberNum,
+  rawMembers, rawPinnedMessage,
+) => ({
+  type: 'SESSION_CONNECT',
   sessionType,
   sessionId,
   memberNum,
-  numMembers,
-});
-
-const getMessageSessionReconnect = (rawMembers, memberNum, rawPinnedMessage) => ({
-  type: 'SESSION_RECONNECT',
-  members: rawMembers.map((_) => !!_.M.connId),
-  memberNum,
+  memberPresence: rawMembers.map((_) => !!_.M.connId),
   ...(rawPinnedMessage ? {
     pinnedMessage: {
       payload: rawPinnedMessage.payload.S,
@@ -354,7 +356,7 @@ const rejoinSession = async (event) => {
   const connId = event.requestContext.connectionId;
 
   // Validate input
-  // `?memberId=<string>`
+  // `?memberId=<string>[&sessionId=<string>]`
   if (!qs.memberId) return softError();
 
   const memberRecord = (await (DDB.getItem({
@@ -362,9 +364,9 @@ const rejoinSession = async (event) => {
     Key: { id: { S: qs.memberId } },
   }).promise())).Item;
 
-  if (!memberRecord) return softError();
+  if (!memberRecord && !qs.sessionId) return softError();
 
-  const sessionId = memberRecord.sessionId.S;
+  const sessionId = memberRecord ? memberRecord.sessionId.S : qs.sessionId;
   const session = await getSession(sessionId);
 
   if (!session.Item) return softError();
@@ -666,6 +668,10 @@ const heartbeat = async (conn, body) => {
     ));
   }
 
+  if (waitingFor && waitingFor.indexOf('CONNECTION') !== -1) {
+    messages.push(getMessageConnection(memberId));
+  }
+
   if (
     isPriv && !started && waitingFor
     && waitingFor.indexOf('PRIVATE_SESSION_PENDING') !== -1
@@ -678,23 +684,13 @@ const heartbeat = async (conn, body) => {
 
   if (
     started && waitingFor
-    && waitingFor.indexOf('SESSION_START') !== -1
+    && waitingFor.indexOf('SESSION_CONNECT') !== -1
   ) {
-    messages.push(getMessageSessionStart(
+    messages.push(getMessageSessionConnect(
       session.type.S,
       session.id.S,
       memberNum,
-      targetNumMembers,
-    ));
-  }
-
-  if (
-    started && waitingFor
-    && waitingFor.indexOf('SESSION_RECONNECT') !== -1
-  ) {
-    messages.push(getMessageSessionReconnect(
       session.members.L,
-      memberNum,
       pinned,
     ));
   }
@@ -887,10 +883,7 @@ exports.sessionMembersChangedHandler = async (event) => {
 
   // Notify new members of their details
   membersThatJustJoined.forEach(
-    (_) => addMessage(_, {
-      type: 'CONNECTION',
-      memberId: _.M.memberId.S,
-    }),
+    (_) => addMessage(_, getMessageConnection(_.M.memberId.S)),
   );
 
   // Notify new private session members of session details
@@ -909,11 +902,12 @@ exports.sessionMembersChangedHandler = async (event) => {
   if (sessionJustStarted) {
     newRawMembers.forEach((_, i) => addMessage(
       _,
-      getMessageSessionStart(
+      getMessageSessionConnect(
         session.type.S,
         session.id.S,
         i,
-        newRawMembers.length,
+        newRawMembers,
+        null,
       ),
     ));
   }
@@ -936,9 +930,11 @@ exports.sessionMembersChangedHandler = async (event) => {
         (cm) => addMessage(
           cm,
           rm.connId === cm.M.connId.S
-            ? getMessageSessionReconnect(
-              newRawMembers,
+            ? getMessageSessionConnect(
+              session.type.S,
+              session.id.S,
               rm.memberNum,
+              newRawMembers,
               session.pinnedMessage && session.pinnedMessage.M,
             )
             : {
