@@ -166,7 +166,7 @@ const sendInvalidConnection = (connId) => communicate(connId, { type: 'INVALID_C
 
 const getMessageConnection = (memberId) => ({
   type: 'CONNECTION',
-  memberId: memberId,
+  memberId,
 });
 
 const getMessageMessage = (payload, time, memberNum, pinned) => ({
