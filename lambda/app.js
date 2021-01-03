@@ -59,7 +59,7 @@ const getMember = (rawMemberList, { memberId, connId }) => {
     ),
   );
 
-  if (memberNum === -1) return { memberNum };
+  if (memberNum === -1) return softError();
 
   const rawMember = rawMemberList[memberNum];
 
@@ -196,7 +196,7 @@ const getMessageSessionConnect = (
     pinnedMessage: {
       payload: rawPinnedMessage.payload.S,
       time: rawPinnedMessage.time.N,
-      memberNum: rawPinnedMessage.memberNum.N,
+      memberNum: parseInt(rawPinnedMessage.memberNum.N, 10),
       pinned: true,
     },
   } : {}),
